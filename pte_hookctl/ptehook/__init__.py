@@ -28,7 +28,8 @@ Usage:
 """
 
 from .session import Session, attach
+from .multi_session import MultiSession, attach_all
 from .actions import ReturnConst, LogArgs, Noop, CallBackup, CallBackupJava
 
-__all__ = ["Session", "attach", "ReturnConst", "LogArgs", "Noop",
-           "CallBackup", "CallBackupJava"]
+__all__ = ["Session", "attach", "MultiSession", "attach_all",
+           "ReturnConst", "LogArgs", "Noop", "CallBackup", "CallBackupJava"]

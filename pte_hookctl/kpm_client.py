@@ -315,13 +315,58 @@ def untag(ptr: int) -> int:
 
 
 def get_pid(package: str) -> int:
-    """通过 adb shell pidof 查 package PID。"""
+    """通过 adb shell pidof 查 package PID。只返主进程（pidof 结果第一个）。"""
     full = ["adb", "-s", ADB_SERIAL, "shell", f"pidof {package}"]
     p = subprocess.run(full, capture_output=True, text=True, timeout=10)
     s = p.stdout.strip()
     if not s:
         raise RuntimeError(f"process {package} not running")
     return int(s.split()[0])
+
+
+def get_pids(package: str, *, include_subprocs: bool = True) -> list:
+    """
+    枚举目标包的所有进程 pid。
+
+    Android app 常见 cmdline 模式：
+        com.target.app          ← main
+        com.target.app:push     ← 推送服务（独立进程）
+        com.target.app:remote   ← 各种远程 service
+        com.target.app:web0     ← 嵌入式 WebView 沙箱
+
+    这些子进程有各自独立的地址空间 / linker / ART runtime（Zygote fork
+    之后 COW 分叉），hook 点通常要在每个进程分别装一份。
+
+    返回 [(pid, cmdline), ...]，按 pid 升序。
+    include_subprocs=False 时只返 main（等价于 get_pid() 的 list 版）。
+    """
+    # Android toybox `ps -A -o PID,CMD` 有时候返回空；稳妥做法是 ps -A 拿 PID 列表，
+    # 再逐个 /proc/PID/cmdline（nul-terminated，真实命令行）。对候选先用 package 字串
+    # 过滤一遍缩范围，再读 cmdline 确认。
+    out = _run(f"ps -A | grep -F '{package}' || true")
+    pids = []
+    for line in out.splitlines():
+        parts = line.split()
+        # 典型格式：USER PID PPID VSZ RSS WCHAN ADDR S NAME
+        if len(parts) < 2 or not parts[1].isdigit():
+            continue
+        pids.append(int(parts[1]))
+    # 去重 + 读真实 cmdline
+    results = []
+    for pid in sorted(set(pids)):
+        try:
+            raw = _run(f"cat /proc/{pid}/cmdline")
+        except Exception:
+            continue
+        # cmdline 用 \0 分隔 argv 后续字段，首段即进程名；strip padding
+        cmd = raw.split("\x00", 1)[0].strip()
+        if not cmd:
+            continue
+        if cmd == package:
+            results.append((pid, cmd))
+        elif include_subprocs and cmd.startswith(package + ":"):
+            results.append((pid, cmd))
+    return results
 
 
 def read_maps(pid: int) -> list:
