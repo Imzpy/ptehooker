@@ -324,6 +324,21 @@ def get_pid(package: str) -> int:
     return int(s.split()[0])
 
 
+def spawn_stop(pid: int) -> None:
+    """内核侧发 SIGSTOP 给目标 pid。延迟 <1ms（比 `adb shell su -c 'kill -STOP'`
+    的 50-150ms 快一个数量级）。供 spawn-mode gating 使用。"""
+    out = ctl_raw(f"spawn-stop {pid}")
+    if "[OK]" not in out:
+        raise RuntimeError(f"spawn-stop failed: {out}")
+
+
+def spawn_cont(pid: int) -> None:
+    """内核侧发 SIGCONT 让之前被 SIGSTOP 的进程继续执行。"""
+    out = ctl_raw(f"spawn-cont {pid}")
+    if "[OK]" not in out:
+        raise RuntimeError(f"spawn-cont failed: {out}")
+
+
 def get_pids(package: str, *, include_subprocs: bool = True) -> list:
     """
     枚举目标包的所有进程 pid。

@@ -29,7 +29,8 @@ Usage:
 
 from .session import Session, attach
 from .multi_session import MultiSession, attach_all
+from .spawn import spawn
 from .actions import ReturnConst, LogArgs, Noop, CallBackup, CallBackupJava
 
-__all__ = ["Session", "attach", "MultiSession", "attach_all",
+__all__ = ["Session", "attach", "MultiSession", "attach_all", "spawn",
            "ReturnConst", "LogArgs", "Noop", "CallBackup", "CallBackupJava"]

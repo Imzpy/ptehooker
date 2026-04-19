@@ -691,6 +691,14 @@ class Session:
              the only near-libart gap gets eaten by one party and the other
              fails ENOSPC).
           2) Fall back to near-libart if no large gap found.
+
+        NOTE (spawn-mode LogArgs limitation): 急早 SIGSTOP 时 app 的 maps
+        还不完整，LARGE-GAP 选中的位置可能落在 linker 即将 mmap 的区域，
+        导致 ghost 页被 new mmap "shadow" → proc_read / shellcode 写入
+        log_buf 都失败，LogArgs callback 不 fire（但 UXN fault 本身还会
+        触发 → hits 计数正常累加）。对 LogArgs 这种 action，spawn 时
+        **必须配 `wait_lib=...`** 等 maps 稳定后再 SIGSTOP。
+        ReturnConst / Noop 这种不读 log_buf 的 action 无此限制。
         """
         maps = K.read_maps(self.pid)
         libart = [(s, e) for s, e, p, _, path in maps
@@ -719,10 +727,16 @@ class Session:
     # ------------------------------------------------------------------
     def run(self, poll_hz: float = 5):
         """Poll each hook's log buffer; fire on_call/on_return callbacks.
-        Blocks; Ctrl+C to stop."""
-        def handler(*_):
-            self._stop = True
-        signal.signal(signal.SIGINT, handler)
+        Blocks; Ctrl+C to stop (only when called from main thread).
+        When called from a non-main thread, caller should set `self._stop = True`
+        externally to break out."""
+        # signal.signal() only works in main thread. If run() is called from a
+        # worker thread (e.g. MultiSession parallel poll), skip signal setup
+        # gracefully.
+        if threading.current_thread() is threading.main_thread():
+            def handler(*_):
+                self._stop = True
+            signal.signal(signal.SIGINT, handler)
 
         interval = 1.0 / poll_hz
         print(f"[*] event loop @ {poll_hz}Hz (Ctrl+C to stop)")

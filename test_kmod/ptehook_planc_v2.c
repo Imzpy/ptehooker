@@ -90,6 +90,7 @@ typedef int (*task_pid_nr_ns_t)(struct task_struct *, int, void *);
 typedef int (*schedule_work_t)(void *work);
 typedef void (*rb_erase_t)(void *node, void *root);
 typedef void (*on_each_cpu_t)(void (*fn)(void *), void *arg, int wait);
+typedef int  (*send_sig_t)(int sig, struct task_struct *p, int priv);
 
 static find_vpid_t           fn_find_vpid;
 static pid_task_t            fn_pid_task;
@@ -105,6 +106,7 @@ static task_pid_nr_ns_t      fn_task_pid_nr_ns;
 static schedule_work_t       fn_schedule_work;
 static rb_erase_t            fn_rb_erase;
 static on_each_cpu_t         fn_on_each_cpu;
+static send_sig_t            fn_send_sig;
 
 static void *addr_do_mem_abort;
 static void *addr_do_mmap;
@@ -1920,6 +1922,47 @@ static int cmd_stat(char *buf, int size)
     return off;
 }
 
+/* ---------- spawn-stop / spawn-cont ---------- *
+ * Send SIGSTOP / SIGCONT to a pid via in-kernel send_sig. Purpose: spawn-mode
+ * gating — host spins pidof polling, as soon as target app's pid appears we
+ * stop it (via this ctl, latency <1ms since it's in-kernel), then host installs
+ * hooks on the suspended task, then sends SIGCONT so the app resumes with
+ * hooks already in place. This catches .init_array / JNI_OnLoad / early SDK
+ * self-check, which attach-mode misses.
+ *
+ * SIGSTOP = 19, SIGCONT = 18 on ARM64 Linux.
+ */
+#define SIGSTOP_ 19
+#define SIGCONT_ 18
+
+static int cmd_spawn_signal(int pid, int sig, char *buf, int buflen)
+{
+    struct pid *pid_struct;
+    struct task_struct *task;
+    int ret;
+    int off = 0;
+
+    if (!fn_find_vpid || !fn_pid_task || !fn_send_sig) {
+        return snprintf(buf, buflen,
+                         "[FAIL] send_sig syms not resolved\n");
+    }
+    pid_struct = fn_find_vpid(pid);
+    if (!pid_struct) {
+        return snprintf(buf, buflen,
+                         "[FAIL] find_vpid(%d) returned NULL\n", pid);
+    }
+    task = fn_pid_task(pid_struct, 0);  /* PIDTYPE_PID = 0 */
+    if (!task) {
+        return snprintf(buf, buflen,
+                         "[FAIL] pid_task(%d) returned NULL\n", pid);
+    }
+    ret = fn_send_sig(sig, task, 1);  /* priv=1: kernel-origin */
+    off += snprintf(buf + off, buflen - off,
+                     "[OK] send_sig(sig=%d, pid=%d) ret=%d\n",
+                     sig, pid, ret);
+    return off;
+}
+
 /* ---------- KPM entry points ---------- */
 
 static long planc2_init(const char *args, const char *event, void *__user r)
@@ -1945,6 +1988,7 @@ static long planc2_init(const char *args, const char *event, void *__user r)
     fn_schedule_work       = (schedule_work_t)kallsyms_lookup_name("schedule_work");
     fn_rb_erase            = (rb_erase_t)kallsyms_lookup_name("rb_erase");
     fn_on_each_cpu         = (on_each_cpu_t)kallsyms_lookup_name("on_each_cpu");
+    fn_send_sig            = (send_sig_t)kallsyms_lookup_name("send_sig");
 
     /* Detect kernel layout (maple tree vs linked list VMAs) */
     probe_kern_layout();
@@ -2130,6 +2174,20 @@ static long planc2_ctl0(const char *args, char *__user out_msg, int outlen)
     }
     else if (str_starts_with(p, "uxn-list")) {
         off = cmd_uxn_list(buf, sizeof(buf));
+    }
+    else if (str_starts_with(p, "spawn-stop")) {
+        int pid;
+        p += 10;
+        while (*p == ' ' || *p == '\t') p++;
+        pid = (int)parse_num(&p);
+        off = cmd_spawn_signal(pid, SIGSTOP_, buf, sizeof(buf));
+    }
+    else if (str_starts_with(p, "spawn-cont")) {
+        int pid;
+        p += 10;
+        while (*p == ' ' || *p == '\t') p++;
+        pid = (int)parse_num(&p);
+        off = cmd_spawn_signal(pid, SIGCONT_, buf, sizeof(buf));
     }
     else if (str_starts_with(p, "uxn-hook")) {
         int pid;

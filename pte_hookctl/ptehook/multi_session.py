@@ -119,10 +119,11 @@ class MultiSession:
     # ------------------------------------------------------------------
     # 事件循环：单线程合并 poll，保持和 Session.run() 一致的用户体验
     def run(self, poll_hz: float = 5):
-        """合并 poll 所有 session 的 log buffer。Ctrl+C 停止。"""
-        def handler(*_):
-            self._stop = True
-        signal.signal(signal.SIGINT, handler)
+        """合并 poll 所有 session 的 log buffer。Ctrl+C 停止（仅主线程）。"""
+        if threading.current_thread() is threading.main_thread():
+            def handler(*_):
+                self._stop = True
+            signal.signal(signal.SIGINT, handler)
 
         total_hooks = sum(len(s.hooks) for s in self.sessions)
         print(f"[multi] event loop @ {poll_hz}Hz, "
